@@ -1,0 +1,473 @@
+//———————————————————————————————————————————————————  NAVIGATION  ———————————————————————————————————————————————————//
+
+
+{
+    {
+        // Calculates how far from the target to place the descent transfer orbit periapsis
+        // function descent_orbit_phase {
+        //     parameter pe.
+        //     parameter state is 0.
+
+        //     // Establish the target periapsis altitude.
+        //     local pe is body:radius + pe.
+        //     local ap is body:radius + apoapsis.
+
+        //     // Determine the semi-major axis of the planned descent orbit.
+        //     local sma is (ap + pe)/2.
+
+        //     // Find the angle the body will rotate through
+        //     // in the time it will take to reach periapsis. 
+        //     local ttp is constant:pi*sqrt(sma^3 / body:mu).
+        //     local phi is constant:radtodeg*body:angularvel:mag*ttp.
+            
+        //     // Get the velocity at the planned periapsis, and
+        //     // the required delta-v from the current velocity.
+        //     local vel_pe is sqrt(body:mu*(2/pe - 1/sma)).
+        //     local srf_spd is body:angularvel:mag*pe.
+        //     local dV is velocity:orbit:mag - vel_pe.
+        //     local vex is systems:effective_exhaust().
+
+        //     // Determine the mass of the lander after the deorbit burn.
+        //     local mf is mass*(1000 - math:exp(-dV/vex)).
+
+        //     // Mass as a function of time.
+        //     local mass_func is {
+        //         parameter t.
+        //         return mf/1000 - t*availablethrust/vex.
+        //     }.
+
+        //     // Establish hypothetical periapsis position and velocity vectors,
+        //     // if initial state was not given.
+        //     if state:istype("lexicon") {
+        //         set r0 to (pe)*state:r:normalized.
+        //         set v0 to (vel_pe-srf_spd)*state:v:normalized.
+        //     }
+        //     else {
+        //         set r0 to (pe)*body:position:normalized.
+        //         set v0 to (vel_pe-srf_spd)*(body:position:normalized*r(0,270,0)).
+        //     }
+
+        //     // Integrate over the landing burn from the hypothetical state.
+        //     utilities:draw_vec({ return 1.25*r0. }, { return body:position. }).
+        //     local deorbit_displacement is integrate_v(r0, v0, 5, 0.1, mass_func@).
+        //     utilities:draw_vec({ return deorbit_displacement:r. }, { return body:position. }).
+
+
+        //     // Angular displacement of landing burn.
+        //     return list(vang(r0, deorbit_displacement:r), phi).
+        // }
+    }
+    function geostationary_altitude {
+        parameter target_body is body.
+
+        local geo_alt is (target_body:mu * (target_body:rotationperiod / (2 * constant:pi))^2)^(1/3).
+        if geo_alt < target_body:soiradius {
+            return geo_alt - target_body:radius.
+        }
+        else {
+            return -1.
+        }
+    }
+
+
+    // TODO: Intra-SOI injection phasing.
+    function intra_soi_phasing {
+        parameter target_body.
+
+        // local r2 is target_hohmann_ap(target_body)
+        // local target_alt is r2:mag - body:radius
+    }
+
+
+    // Extra-SOI injection phasing.
+    function extra_soi_phasing {
+        parameter target_body.
+
+        // Desired aphelion.
+        local r2 is target_hohmann_ap(target_body).
+        local target_alt is r2:mag - sun:radius.
+
+        return lex(
+            "atp", ejection_angle(r2),
+            "t_alt", target_alt
+        ).
+    }
+
+
+    // Desired hohmann transfer ellipse apoapsis.
+    function target_hohmann_ap {
+        parameter target_body.
+
+        // CHOOSE expression1 IF condition ELSE expression2
+        local central_body is choose body if target_body:body = body else sun.
+
+        // Current phase angle between destination and origin bodies.
+        local phase is phase_angle(target_body).
+
+        // Destination body change in true anomaly for 180° hohmann transfer from origin body.
+        local delta_nu is mod(target_body:orbit:trueanomaly + 180 - phase, 360).
+
+        // Approximate time of flight of destination body to intercept.
+        local arrival_time is time:seconds + time_of_flight(delta_nu, target_body:orbit).
+
+        // Desired aphelion.
+        return (positionat(target_body, arrival_time) - positionat(central_body, arrival_time)).
+    }
+
+
+    // Desired ejection angle.
+    function ejection_angle {
+        parameter r2.
+        local r1 is body:position - sun:position.
+
+        // Hohmann transfer injection velocity.
+        local v_inf is sqrt(sun:mu/r1:mag) * (sqrt((2*r2:mag)/(r1:mag + r2:mag)) - 1).
+        
+        // Parking orbit pre-injection velocity.
+        local v_circ is sqrt(body:mu/orbit:semimajoraxis).
+        
+        // Injection Δv
+        local delta_v is v_circ * (sqrt(2 + (v_inf/v_circ)^2) - 1).
+
+        // Injection eccentricity and desired ejection angle.
+        local hyper_e is 1 + (orbit:semimajoraxis*v_inf^2)/body:mu.
+        local theta_inf is arccos(-1/hyper_e).
+        
+        // Approximate displacement during injection maneuver.
+        local disp is constant:radtodeg*systems:burn_disp(delta_v)/body:position:mag.
+
+        return (theta_inf + disp/2).
+    }
+
+
+    // Return phase angle with an orbitable 'target_body'.
+    // Can also include a 'displacement_angle'.
+    // Function signature: phase_angle(orbitable, float°) → float°. 
+    // NOTE: CENTRAL BODY AND ORIGIN BODY ARE CHOSEN AUTOMATICALLY.
+    function phase_angle {
+        parameter target_body, displacement_angle is 0.
+
+        local central_body is choose body if target_body:body = body else sun.
+        local origin_body is choose ship if central_body = body else body.
+
+        local u is origin_body:position - central_body:position.
+        local w is target_body:position - central_body:position.
+        local normal is vcrs(u, origin_body:velocity:orbit - central_body:velocity:orbit).
+        local z is angleaxis(-displacement_angle, normal).
+
+        return helpers:tau_vang(u, z*w, normal).
+    }
+
+
+    // Angle between ship position and body prograde.
+    function to_prograde {
+        parameter ang is 0.
+
+        local w is body:velocity:orbit - body:body:velocity:orbit.
+        local norm is specific_angular_momentum().
+        local z is angleaxis(-ang, norm).
+
+        return helpers:tau_vang(-body:position, z*w, norm).
+    }
+
+
+    // Angle between ship position and body retrograde.
+    function to_retrograde {
+        parameter ang is 0.
+        return mod(180 + to_prograde(ang), 360).
+    }
+
+
+    // Angle between ship position and equatorial ascending node.
+    function to_eq_an {
+        local norm is specific_angular_momentum().
+
+        return helpers:tau_vang(-body:position, vcrs(v(0,1,0), norm), norm).
+    }
+
+
+    // Angle between ship position and equatorial descending node.
+    function to_eq_dn {
+        return mod(180 + to_eq_an(), 360).
+    }
+
+
+    // Angle between ship position and target body relative ascending node.
+    // NOTE: ASSUMES YOU ARE IN THE SAME SOI AS YOUR TARGET.
+    function to_rel_an {
+        parameter target_body.
+        local norm is specific_angular_momentum().
+        local tgt_norm is specific_angular_momentum(target_body).
+
+        return helpers:tau_vang(-body:position, vcrs(norm, tgt_norm), norm).
+    }
+
+
+    // Angle between ship position and target orbit descending node.
+    // NOTE: ASSUMES YOU ARE IN THE SAME SOI AS YOUR TARGET.
+    function to_rel_dn {
+        parameter target_body.
+        return mod(180 + to_rel_an(target_body), 360).
+    }
+
+
+    // Relative inclination with target orbit.
+    function relative_inclination {
+        parameter tgt_obt.
+        local ship_h is specific_angular_momentum().
+        local tgt_h is specific_angular_momentum(tgt_obt).
+        local hxh is vcrs(ship_h, tgt_h).
+        return helpers:pi_vang(ship_h, tgt_h, hxh).
+    }
+
+
+    // Angular momentum vector of the given orbitable (defaults to ship).
+    function specific_angular_momentum {
+        parameter obj is ship.
+        local obj_position is obj:position - obj:body:position.
+        local obj_velocity is obj:velocity:orbit - obj:body:velocity:orbit.
+        return vcrs(obj_position, obj_velocity).
+    }
+
+
+//—————————————————————————————————————————————————————  COASTS  —————————————————————————————————————————————————————//
+
+
+    // Coast to desired true anomaly - exit_time in seconds. Defaults to 60.
+    function to_nu {
+        parameter ang, exit_time is 60.
+        systems:warp_to(time_of_flight(mod(orbit:trueanomaly + ang, 360)) - exit_time).
+        wait 0.
+    }
+
+
+    // Coast to desired phase angle.
+    // 'phz' is a function delegate.
+    function to_phz {
+        parameter phz.
+
+        local tof is {
+            return time_of_flight(mod(orbit:trueanomaly + phz(), 360)).
+        }.
+
+        systems:warp_to(tof() - 30).
+        set kuniverse:timewarp:mode to "physics".
+        set kuniverse:timewarp:warp to 3.
+
+        wait until tof() < 10.
+        set kuniverse:timewarp:warp to 0.
+        wait until tof() < 1.
+    }
+
+
+    // Coast to flyby periapsis at target_body.
+    // NOTE: ASSUMES AN ENCOUNTER AND A PERIAPSIS WITH TARGET_BODY, WILL CRASH IF NONE EXISTS.
+    function to_flyby {
+        parameter target_body, exit_time is 90.
+
+        local n is helpers:flyby_patch(target_body).
+        local flyby is ship:patches[n].
+
+        local tof_1 is ship:patches[n - 1]:nextpatcheta.
+        local tof_2 is time_of_flight(360, flyby, flyby:trueanomaly).
+
+        systems:warp_to(tof_1 + tof_2 - exit_time).
+    }
+
+
+    // Coast to next patch's relative ascending/descending node, for interplanetary mid-course corrections.
+    function to_node {
+        parameter target_body.
+        
+        // Time of flight to origin SOI exit.
+        local tof_1 is time_of_flight(soi_exit()) + 10.
+
+        // r and v at SOI exit.
+        local r_trans is positionat(ship, time:seconds + tof_1) - positionat(sun, time:seconds + tof_1).
+        local v_trans is velocityat(ship, time:seconds + tof_1):orbit.
+
+        // Relative specific angular momentum vectors.
+        local h_trg is navigation:specific_angular_momentum(target_body).
+        local h_sun is orbital_elements(orbit:nextpatch):h.
+
+        // True anomaly at start of next patch.
+        local sign is helpers:dot_sign(h_sun, vcrs(pe_vec(orbit:nextpatch), r_trans)).
+        local nu_sun is mod(360 + sign*nu_of_r(r_trans:mag, orbit:nextpatch), 360).
+
+        // Delta true anomaly from SOI transition to the nearest relative ascending/descending node.
+        local theta_to_an is helpers:tau_vang(r_trans, vcrs(h_sun, h_trg), h_sun).
+        local dTheta is nu_sun + min(theta_to_an, mod(theta_to_an + 180, 360)).
+        
+        // Time of flight to nearest relative ascending/descending node as a function of delta true anomaly.
+        local tof_2 is time_of_flight(dTheta, orbit:nextpatch) - 70.
+
+        // Engage!
+        systems:warp_to(tof_1 + tof_2).
+        wait 0.
+    }
+
+
+//—————————————————————————————————————————————————  ASTRODYNAMICS  ——————————————————————————————————————————————————//
+
+
+    // Your ship's orbital elements in any patch.
+    function orbital_elements {
+        parameter o is orbit.
+
+        return lex(
+            "r",    o:position - o:body:position,
+            "v",    o:velocity:orbit,
+            "h",    vcrs(o:position - o:body:position, o:velocity:orbit),
+            "e",    o:eccentricity,
+            "nu",   o:trueanomaly,
+            "mu",   o:body:mu,
+            "soi",  o:body:soiradius,
+            "sma",  o:semimajoraxis,
+            "slr",  o:semimajoraxis*(1 - o:eccentricity^2),
+            "aop",  o:argumentofperiapsis,
+            "mae",  o:meananomalyatepoch,
+            "epo",  o:epoch
+        ).
+    }
+
+
+    // Periapsis vector for any patch (technically, this is the eccentricity vector).
+    function pe_vec {
+        parameter o is orbit.
+
+        local o is orbital_elements(o).
+        return 1/o:mu * vcrs(o:v, o:h) - o:r:normalized.
+    }
+
+
+    // Apoapsis vector for any patch that has an apoapsis (i.e., NOT hyperbolic trajectories).
+    function ap_vec {
+        parameter o is orbit.
+        return -pe_vec(o).
+    }
+
+
+    // True anomaly as a function of distance to central body.
+    function nu_of_r {
+        parameter r0, o is orbit.
+
+        local o is orbital_elements(o).
+        return round(arccos(1/o:e * (o:slr/r0 - 1)), 8).
+    }
+
+
+    // True anomaly at SOI exit.
+    function soi_exit {
+        parameter o is orbit.
+        return nu_of_r(o:body:soiradius, o).
+    }
+
+
+    // True anomaly at SOI entry.
+    function soi_entry {
+        parameter o is orbit.
+        return 360 - nu_of_r(o:body:soiradius, o).
+    }
+
+
+    // Time of flight to the given true anomaly.
+    function time_of_flight {
+        parameter nu_f, o is orbit, nu_i is o:trueanomaly.
+
+        local o is orbital_elements(o).
+        local E_f is eccentric_anomaly(nu_f, o:e).
+        local E_i is eccentric_anomaly(nu_i, o:e).
+
+        return sqrt(abs(o:sma)^3 / o:mu) * delta_M(E_f, E_i, o:e).
+    }
+
+
+    // Mean anomaly at time t, in radians.
+    function mean_anomaly {
+        parameter t is time:seconds.
+
+        local mean_motion is sqrt(body:mu / orbit:semimajoraxis^3).
+        local M0 is orbit:meananomalyatepoch.
+        local t0 is orbit:epoch.
+
+        return constant:degtorad * M0 + mean_motion * (t - t0).
+    }
+
+
+    // Eccentric anomaly at time t, in radians.
+    function eccentric_anomaly_at_t {
+        parameter t is time:seconds.
+
+        local ecc is orbit:eccentricity.
+        local M is { parameter t. return mean_anomaly(t). }.
+        local E is M(t).
+
+        until abs(E - ecc * rad_sin(E) - M(t)) < 1e-8 {
+            set E to E - (E - ecc * rad_sin(E) - M(t)) / (1 - ecc * rad_cos(E)).
+            wait 0.
+        }
+
+        return E.
+    }
+
+
+    // Hyperbolic or normal eccentric anomaly as a function of true anomaly, nu.
+    function eccentric_anomaly {
+        parameter nu, e.
+        local arg is sqrt(abs(1 - e)/(1 + e)) * tan(nu / 2).
+        
+        if e > 1 return 2*math:atanh(arg).
+        else return 2*arctan(arg).
+    }
+
+
+    // Delta hyperbolic or normal mean anomaly.
+    function delta_M {
+        parameter E_f, E_i, e.
+        local delta_E is mod(E_f - E_i + 360, 360).
+    
+        if e > 1 return e*(math:sinh(E_f) - math:sinh(E_i)) - delta_E.
+        else return constant:degtorad*delta_E - e*(sin(E_f) - sin(E_i)).
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "geostationary_altitude", geostationary_altitude@,
+        "intra_soi_phasing", intra_soi_phasing@,
+        "extra_soi_phasing", extra_soi_phasing@,
+        "target_hohmann_ap", target_hohmann_ap@,
+        "ejection_angle", ejection_angle@,
+        "phase_angle", phase_angle@,
+        // "descent_orbit_phase", descent_orbit_phase@,
+        "relative_inclination", relative_inclination@,
+        "specific_angular_momentum", specific_angular_momentum@,
+        "angle", lex(
+            "to_prograde", to_prograde@,
+            "to_retrograde", to_retrograde@,
+            "to_eq_an", to_eq_an@,
+            "to_eq_dn", to_eq_dn@,
+            "to_rel_an", to_rel_an@,
+            "to_rel_dn", to_rel_dn@
+        ),
+        "coast", lex(
+            "to_nu", to_nu@,
+            "to_phz", to_phz@,
+            "to_flyby", to_flyby@,
+            "to_node", to_node@
+        ),
+        "astrodynamics", lex(
+            "orbital_elements", orbital_elements@,
+            "pe_vec", pe_vec@,
+            "ap_vec", ap_vec@,
+            "nu_of_r", nu_of_r@,
+            "soi_exit", soi_exit@,
+            "soi_entry", soi_entry@,
+            "time_of_flight", time_of_flight@,
+            "eccentric_anomaly", eccentric_anomaly@,
+            "delta_M", delta_M@
+        )
+    )).
+}

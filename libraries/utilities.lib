@@ -1,0 +1,218 @@
+//———————————————————————————————————————————————————  UTILITIES  ————————————————————————————————————————————————————//
+
+
+{
+    // Establishes a connection to this core's dedicated utility CPU, and initializes terminal window.  
+    function initialize {
+        clearscreen.
+
+        if ship:partstagged(core:tag + "_SYS"):length > 0 {
+            local sys is processor(core:tag + "_SYS").
+            set sys:bootfilename to "sys.ks". sys:activate. wait 1.
+        }
+
+        // set terminal:width to 21.
+        // wait 0.
+        // set terminal:height to 15.
+    }
+
+
+    // Set IPU to val. Defaults to 200.
+    function ipu {
+        parameter val is 200.
+        set config:ipu to val.
+    }
+
+
+    // Quicksaves after completing the most recent mission phase.
+    function save {
+        parameter save_name.
+        set throt to 0.
+        wait 0.
+        if kuniverse:canquicksave kuniverse:quicksaveto(save_name).
+    }
+
+
+    // Right-pad data with a given char. Defaults to whitespace padding.
+    function r_pad {
+        parameter data, pad_size, char is " ".
+
+        local data is data:tostring().
+        until data:length() = pad_size {
+            set data to data + char.
+        }
+
+        return data.
+    }
+
+
+    // Left-pad data with a given char. Defaults to whitespace padding.
+    function el_pad {
+        parameter data, pad_size, char is " ".
+
+        local data is data:tostring().
+        until data:length() = pad_size {
+            set data to char + data.
+        }
+
+        return data.
+    }
+
+
+    // Draws a vector from tail to tip.
+    // vec_color is either an rgb() or cmy() object, but defaults to a random rgb().
+    // If tail and/or tip are delegates, they are used to update the vector.
+    function draw_vec {
+        parameter tip, tail is v(0,0,0), vec_color is rgb(random(), random(), random()), label is "".
+
+        local type is { parameter x. if x:istype("UserDelegate") return x(). else return x. }.
+        local vec is vecdraw(type(tail), type(tip), vec_color, label, 1, true, 0.2).
+        
+        if tip:istype("UserDelegate") set vec:vecupdater to { return tip(). }.
+        if tail:istype("UserDelegate") set vec:startupdater to { return tail(). }.
+    }
+
+
+    // Draws current foreward, normal, and radial FACING vectors.
+    function facing_vectors {
+        draw_vec({ return ship:facing*r(0,0,270):vector*20. }, { return v(0,0,0). }, cmy(0,0,1), "facing fre").
+        draw_vec({ return ship:facing*r(0,270,0):vector*20. }, { return v(0,0,0). }, cmy(0,1,0), "facing nrm").
+        draw_vec({ return ship:facing*r(270,0,0):vector*20. }, { return v(0,0,0). }, cmy(1,0,0), "facing rad").
+    }
+
+
+    // Draws vectors for full thrust force, gravitational force, and their sum.
+    function force_vectors {
+        local fg is { return (mass*body:mu/body:position:sqrmagnitude)*body:direction:vector. }.
+        local ft is { return (availablethrust)*ship:facing:vector. }.
+        local net is { return fg() + ac(). }.
+
+        draw_vec(fg@, {return v(0,0,0).}, cmy(1,0,0), "gravitational force (N)").
+        draw_vec(ft@, {return v(0,0,0).}, cmy(0,1,0), "full thrust force (N)").
+        draw_vec(net@, {return v(0,0,0).}, cmy(0,0,1), "net force (N)").
+    }
+
+
+    // Draws vectors for gravitational acceleration, full thrust acceleration, and their sum.
+    function acceleration_vectors {
+        local ag is { return (body:mu/body:position:sqrmagnitude)*body:direction:vector. }.
+        local ac is { return (availablethrust/mass)*ship:facing:vector. }.
+        local net is { return ag() + ac(). }.
+
+        draw_vec(ag@, {return v(0,0,0).}, cmy(1,0,0), "gravitational acceleration (m/s^2)").
+        draw_vec(ac@, {return v(0,0,0).}, cmy(0,1,0), "full thrust acceleration (m/s^2)").
+        draw_vec(net@, {return v(0,0,0).}, cmy(0,0,1), "net acceleration (m/s^2)").
+    }
+
+
+    // Change orbit load distance settings. Resets to default if params left empty.
+    function distance_settings {
+        parameter val is 1, prnt is false.
+        local ld is kuniverse:defaultloaddistance:orbit.
+
+        set ld:load to val*2250.
+        set ld:unload to val*2500.
+        set ld:unpack to val*200.
+        set ld:pack to val*350.
+
+        if prnt {
+            print "load:":padright(15) + ld:load:tostring():padleft(10) + "m":padleft(2).
+            print "unload:":padright(15) + ld:unload:tostring():padleft(10) + "m":padleft(2).
+            print "unpack:":padright(15) + ld:unpack:tostring():padleft(10) + "m":padleft(2).
+            print "pack:":padright(15) + ld:pack:tostring():padleft(10) + "m":padleft(2).
+        }
+    }
+
+
+    // Converts seconds to dd:hh:mm:ss.
+    function seconds_to_calendar {
+        parameter t.
+        local d is t/21600.
+        local h is mod(d, floor(d))*6.
+        local m is mod(h, floor(h))*60.
+        local s is mod(m, floor(m))*60.
+
+        return list(floor(d):tostring() + "d", floor(h):tostring() + "h", floor(m):tostring() + "m", floor(s):tostring() + "s"):join(" ").
+    }
+
+
+    // Prompt the user for terminal input. Will clear screen of any and all data when invoked.
+    // NOTE: HANDLES BACKSPACE, BUT NOT DEL OR CURSOR SCRUBBING.
+    function get_terminal_input {
+        // Instructions.
+        clearscreen.
+        print "Awaiting input! Press [enter] when done." at (0,0).
+
+        // Initialize input, output, and input line cursor.
+        local input is "".
+        local output is "".
+        local col is 2.
+        local row is 2.
+        carriage_return().
+
+        // Reset cursor to start of next line.
+        function carriage_return {
+            print ">" at (0, row).
+            print "_" at (col, row).
+        }
+
+        // Deletes the last character typed, and returns to the previous line if necessary.
+        function bksp {
+            set output to output:substring(0, output:length() - 1).
+            set col to col - 1.
+            if col < 2 {
+                print "":padright(terminal:width) at (0, row).
+                set col to terminal:width - 2.
+                set row to row - 1.
+            }
+            print "_" at (col, row).
+            print " " at (col + 1, row).
+        }
+
+        // Read terminal input until enter key is pressed.
+        until input = terminal:input:enter {
+            set input to terminal:input:getchar().
+
+            // Deletes last input, and checks cursor position.
+            if input = terminal:input:backspace bksp().
+
+            else {
+                set output to output + input.
+                print input at (col, row).
+                set col to col + 1.
+
+                // Checks cursor position. If at edge of terminal, go to next line.
+                if mod(col, terminal:width - 1) = 0 {
+                    set row to row + 1.
+                    set col to 2.
+                    carriage_return().
+                }
+
+                // Advance cursor.
+                print "_" at (col, row).
+            }
+        }
+
+        return output.
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "initialize", initialize@,
+        "ipu", ipu@,
+        "save", save@,
+        "r_pad", r_pad@,
+        "el_pad", el_pad@,
+        "draw_vec", draw_vec@,
+        "facing_vectors", facing_vectors@,
+        "force_vectors", force_vectors@,
+        "acceleration_vectors", acceleration_vectors@,
+        "distance_settings", distance_settings@,
+        "seconds_to_calendar", seconds_to_calendar@,
+        "get_terminal_input", get_terminal_input@
+    )).
+
+}

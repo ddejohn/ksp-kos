@@ -1,0 +1,207 @@
+//—————————————————————————————————————————————  MATHEMATICAL FUNCTIONS  —————————————————————————————————————————————//
+
+
+{
+    // Adaptive RK4
+    function rka {
+        parameter state, dt.
+
+        // DivByZero safety, and max dt change safety params.
+        local eps is 1e-100.
+        local thresh is 1e-7.
+
+        // Attempt to satisfy error bound 100 times
+        local steps is 0.
+        until steps = 100 {
+            // Four quarter-steps of rk4 and one full step.
+            local qdt is 0.25 * dt.
+            local quarter is rk4(rk4(rk4(rk4(state, qdt), qdt), qdt), qdt).
+            local full is rk4(state, dt).
+
+            // Absolute difference of the quarter- and full-step state vectors.
+            local total_error is (full:r - quarter:r):mag + (full:v - quarter:v):mag.
+
+            // eps is a DivByZero safety.
+            set dt to dt * (thresh / (total_error + eps))^(0.2).
+            set steps to steps + 1.
+
+            print "total_error: " + total_error at (0,20).
+            print "steps: " + steps + "            " at (0,21).
+            print "dt: " + round(dt, 5) at (0,22).
+
+            if total_error < thresh {
+                return lex(
+                    "r", quarter:r,
+                    "v", quarter:v,
+                    "dt", dt
+                ).
+            }
+            wait 0.
+        }
+
+        print "UNABLE TO SATISFY ERROR".
+    }
+
+
+    // Fourth order Runge-Kutta.
+    function rk4 {
+        parameter state, dt.
+
+        local hdt is 0.5*dt.
+
+        local X1 is dX(state:r, state:v).
+        local X2 is dX(state:r + hdt*X1:dr, state:v + hdt*X1:dv).
+        local X3 is dX(state:r + hdt*X2:dr, state:v + hdt*X2:dv).
+        local X4 is dX(state:r + dt*X3:dr, state:v + dt*X3:dv).
+
+        return lex(
+            "r", state:r + (dt/6) * (X1:dr + X4:dr + 2*(X2:dr + X3:dr)),
+            "v", state:v + (dt/6) * (X1:dv + X4:dv + 2*(X2:dv + X3:dv))
+        ).
+    }
+
+
+    // Runge-Kutta derivatives.
+    function dX {
+        parameter r0, v0.
+
+        return lex("dr", v0, "dv", -(body:mu / r0:mag^3) * r0).   
+    }
+
+
+    // Constant mass integration.
+    function integrate {
+        parameter r0, v0, tf, mthd.
+        parameter dt is 0.1.
+
+        local t0 is 0.
+        local steps is 0.
+        local state is lex("r", r0, "v", v0).
+
+        until t0 > tf {
+            set state to mthd(state, dt).
+            if state:haskey("dt") {
+                set dt to state:dt.
+                set state to lex(
+                    "r", state:r,
+                    "v", state:v
+                ).
+            }
+            set t0 to t0 + dt.
+            set steps to steps + 1.
+        }
+
+        print "STEPS: " + steps at (0,1).
+
+        return state.
+    }
+
+    // Hyperbolic sine.
+    function sinh {
+        parameter x.
+        return 1/2 * (constant:e^x - constant:e^(-x)).
+    }
+
+
+    // Inverse hyperbolic tangent. 
+    function atanh {
+        parameter x.
+        return 1/2 * ln((1 + x)/(1 - x)).
+    }
+
+
+    // Compute the cosine of an angle given in radians.
+    function rad_cos {
+        parameter x.
+        return cos(constant:radtodeg*x).
+    }
+
+
+    // Compute the sine of an angle given in radians.
+    function rad_sin {
+        parameter x.
+        return sin(constant:radtodeg*x).
+    }
+
+
+    // Sum over a list of numbers, sums from initial value 'result' (defaults to 0).
+    function sum {
+        parameter itr, result is 0.
+        for x in itr set result to result + x.
+        return result.
+    }
+
+
+    // Sum over a list of numbers while applying function f.
+    function sum_f {
+        parameter f, itr, result is 0.
+        for x in itr set result to result + f(x).
+        return result.
+    }
+
+
+    // Exponential function.
+    function exp {
+        parameter x.
+        return constant:e^(x).
+    }
+
+    
+    // Return a delegate which maps x in the interval [a, b] to the interval [-1, 1].
+    // transform: [a, b] → [-1, 1] ; x ϵ [a, b] ϵ R.
+    function transform {
+        parameter a, b.
+        return {
+            parameter x.
+            return (2*x-b-a)/abs(b-a).
+        }.
+    }
+
+
+    // Add a scalar to each vector component.
+    function vec_plus_scalar {
+        parameter vec, a.
+
+        return v(vec:x + a, vec:y + a, vec:z + a).
+    }
+
+
+    // Component-wise absolute value.
+    function abs_vec {
+        parameter vec.
+
+        return v(abs(vec:x), abs(vec:y), abs(vec:z)).
+    }
+
+
+    function vec_comp_div {
+        parameter v1, v2.
+
+        return v(v1:x / v2:x, v1:y / v2:y, v1:z / v2:z).
+    }
+
+
+    // Max absolute value component.
+    function max_vec {
+        parameter vec.
+
+        set vec to abs_vec(vec).
+        return max(vec:x, max(vec:y, vec:z)).
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "rka", rka@,
+        "rk4", rk4@,
+        "integrate", integrate@,
+        "sinh", sinh@,
+        "atanh", atanh@,
+        "sum", sum@,
+        "sum_f", sum_f@,
+        "exp", exp@,
+        "transform", transform@
+    )).
+}

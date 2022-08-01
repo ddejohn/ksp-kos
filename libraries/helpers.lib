@@ -1,0 +1,116 @@
+//————————————————————————————————————————————————  HELPER FUNCTIONS  ————————————————————————————————————————————————//
+
+
+{
+    // Ordered list of patch indices for which the central body is target_body.
+    function get_patches {
+        parameter target_body.
+        local target_patches is list().
+
+        for n in range(ship:patches:length()) {
+            if ship:patches[n]:body = target_body {
+                target_patches:add(n).
+            }
+        }
+        return target_patches. // list()
+    }
+
+
+    // Returns the patch index of the target_body flyby.
+    function flyby_patch {
+        parameter target_body.
+        local patches is get_patches(target_body).
+        
+        local flyby is patches[0].
+        for n in patches {
+            if ship:patches[n]:trueanomaly > ship:patches[flyby]:trueanomaly {
+                set flyby to n.
+            }
+        }
+        return flyby. // int
+    }
+
+
+    // Time warp speed helper function. Uses the sum of offset sigmoids
+    // to create a continous "stair-step" function.
+    // NOTE: YES, IT'S UGLY AF, BUT IT'S WAY FASTER THAN MORE ELEGANT SOLUTIONS.
+    function rail_warp {
+        parameter x.
+        return round(1/(1+constant:e^(min(100, -(x-60)))) +
+            1/(1+constant:e^(min(100, -(x-80)))) +
+            1/(1+constant:e^(min(100, -(x-100)))) +
+            1/(1+constant:e^(min(100, -(x-180)))) +
+            1/(1+constant:e^(min(100, -(x-3600)))) +
+            1/(1+constant:e^(min(100, -(x-36000)))) +
+            1/(1+constant:e^(min(100, -(x-300000))))).
+    }
+
+
+    // Convert vang from [0, 180)° to (-180, 180]°. Requires vector normal to u and w BESIDES their cross product.
+    // NOTE: since only directions are needed, all vectors are normalized in order to avoid floating point errors.
+    function pi_vang {
+        parameter u, w, norm.
+        return dot_sign(norm:normalized, vcrs(u:normalized, w:normalized):normalized)*vang(u:normalized, w:normalized).
+    }
+
+
+    // Convert pi_vang from (-180, 180]° to [0, 360)°. Requires vector normal to u and w BESIDES their cross product.
+    function tau_vang {
+        parameter u, w, norm.
+        return mod(360 + pi_vang(u, w, norm), 360).
+    }
+
+
+    // Return 1 or -1 for vectors in the same or opposition directions, respectively.
+    function dot_sign {
+        parameter u, w.
+        local dot is vdot(u, w).
+        return dot/(2^(-53) + abs(dot)). // to avoid division by zero.
+    }
+
+
+    // Rounds input to given order of magnitude. Defaults to nearest thousand.
+    // Ex: tens_round(14223, 10)    = 14220.
+    // Ex: tens_round(14223, 100)   = 14200.
+    // Ex: tens_round(14223, 1000)  = 14000.
+    // Ex: tens_round(14223, 10000) = 10000.
+    function tens_round {
+        parameter num, mag is 1000.
+        return mag*round(num/mag).
+    }
+
+
+    // Return an RGBA type in terms of cyan, magenta, yellow, alpha where:
+    // cyan     = rgb(0, c, c),
+    // magenta  = rgb(m, 0, m),
+    // yellow   = rgb(y, y, 0).
+    // Alpha defaults to 1 (fully opaque).
+    function cmy {
+        parameter c, m, y, a is 1.
+        return rgba(m + y, c + y, c + m, a).
+    }
+
+
+    // Return an ordered pair from min to max.
+    // ex: minmax(35, -15) → [-15, 35].
+    function minmax {
+        parameter a, b.
+        return list(min(a,b), max(a,b)).
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "get_patches", get_patches@,
+        "flyby_patch", flyby_patch@,
+        "rail_warp", rail_warp@,
+        "pi_vang", pi_vang@,
+        "tau_vang", tau_vang@,
+        "dot_sign", dot_sign@,
+        "tens_round", tens_round@,
+        "cmy", cmy@,
+        "minmax", minmax@
+    )).
+}

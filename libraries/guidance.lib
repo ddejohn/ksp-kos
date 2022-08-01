@@ -1,0 +1,283 @@
+//———————————————————————————————————————————————  ORBITAL MANEUVERS  ————————————————————————————————————————————————//
+
+
+{
+    lock EAST to UP + r(0, 270, 90).
+    lock SRFP to srfprograde + r(0, 0, 180).
+
+    // Intra-SOI Hohmann transfer injection.
+    // NOTE: ASSUMES CORRECT PHASE ANGLE.
+    // For interplanetary injections, see extra_soi.
+    function intra_soi_injection {
+        parameter target_val.
+
+        systems:steer_to("pro").
+        local variable is { return orbit:nextpatch:periapsis. }.
+        local proceed_cond is { return orbit:hasnextpatch. }.
+
+        control:fractional_throttle(variable, target_val, proceed_cond).
+    }
+
+
+    // Extra-SOI Hohmann transfer injection. Assumes correct planetary phase angle, and angle to prograde.
+    // For transfers to bodies in your current SOI, see in_soi_inj().
+    function extra_soi_injection {
+        parameter target_alt.
+
+        // TODO: fractional throttle
+        set throt to 1.
+        wait until orbit:eccentricity > 1. wait 1.
+
+        until helpers:tens_round(orbit:nextpatch:apoapsis, 10) = helpers:tens_round(target_alt, 10) {
+            set throt to control:neg_exp(orbit:nextpatch:apoapsis, 1, target_alt, 4E7).
+            wait 0.
+        }
+
+        set throt to 0. wait 1.
+
+        local ang_err is {
+            return helpers:pi_vang(navigation:astrodynamics:ap_vec(orbit:nextpatch),
+            sun:position - body:position, obt_elm("h", orbit:nextpatch)).
+        }.
+        
+        local ang_diff is ang_err().
+        
+        if ang_diff < 0 systems:steer_to("rad").
+        else systems:steer_to("a_rad").
+
+        until round(ang_diff) = 0 {
+            set ang_diff to ang_err().
+            set throt to 1 - control:gaussian(ang_diff, 1000).
+            wait 0.
+        }
+
+        set throt to 0. wait 1.
+    }
+
+
+    // Orbital insertion. Decelerate until desired apoapsis reached.
+    function insertion {
+        parameter target_val.
+
+        systems:steer_to("a_pro").
+        local variable is { return apoapsis. }.
+        local proceed_cond is {
+            return orbit:transition = "final" and apoapsis < 3*target_val.
+        }.
+
+        control:fractional_throttle(variable, target_val, proceed_cond).
+    }
+
+
+    // Circularize orbit.
+    function circularize {
+        parameter val is 0.00000125, mult is 1000.
+        systems:steer_to("pro").
+        maneuver(
+            { return orbit:eccentricity. },
+            { return navigation:astrodynamics:ap_vec(). },
+            { return sqrt(body:mu/(body:radius + apoapsis)) - velocity:orbit:mag. },
+            val,
+            mult
+        ).
+    }
+
+
+    // Change to equatorial orbit.
+    function change_inclination {
+        parameter val is 0.00000125, mult is 1000.
+
+        local tgt is 0.
+        // Coast to closest node.
+        navigation:coast:to_nu(min(navigation:angle:to_eq_an(), navigation:angle:to_eq_dn()), 45).
+
+        if navigation:angle:to_eq_an() < navigation:angle:to_eq_dn() {
+            systems:steer_to("a_nml").
+            set tgt to {
+                return vcrs(v(0,1,0), navigation:specific_angular_momentum():normalized):normalized.
+            }.
+        }
+
+        else {
+            systems:steer_to("nml").
+            set tgt to { return vcrs(navigation:specific_angular_momentum():normalized, v(0,1,0)):normalized. }.
+        }
+
+        maneuver(
+            { return orbit:inclination. },
+            tgt@,
+            { return 2*velocity:orbit:mag*sin(orbit:inclination/2). },
+            val,
+            mult
+        ).
+    }
+
+
+    // Gaussian throttle control for precision maneuvers.
+    function maneuver {
+        parameter type, tgt, dV, val is 1.25e-6, mult is 1000.
+
+        utilities:ipu(500).
+        until type() < val {
+            local r0 is positionat(ship, time:seconds + systems:burn_time(dV())/2) - body:position.
+            local x is helpers:pi_vang(r0:normalized, tgt(), navigation:specific_angular_momentum()).
+            
+            set throt to control:gaussian(x, mult).
+            wait 0. 
+        }
+
+        set throt to 0. wait 5.
+    }
+
+
+    // TODO: use change_inclination()
+    // Match target orbit inclination.
+    function match_inclination {
+        parameter node_type, tgt_obt, mult is 1000.
+
+        systems:steer_to(node_type).
+
+        until relative_inclination(tgt_obt) < 0.000001 {
+            local dV is 2*velocity:orbit:mag*sin(relative_inclination(tgt_obt)).
+            local r_0 is positionat(ship, time:seconds + systems:burn_time(dV)/2) - body:position.
+            local node is vcrs(
+                specific_angular_momentum():normalized,
+                specific_angular_momentum(tgt_obt):normalize
+            ).
+
+            if node_type = "dn" set node to -node.
+
+            local x is pi_vang(r_0, node, specific_angular_momentum()).
+
+            set throt to gaussian(x, mult).
+            wait 0. 
+        }
+
+        set throt to 0. wait 5.
+    }
+
+
+    // Docks with target vessel.
+    // NOTE: BOTH SHIPS MUST HAVE A DOCKING PORT TAGGED "PORT".
+    function dock {
+        local t_port is target:partstagged("port")[0].
+        local c_port is ship:partstagged("port")[0].
+
+        c_port:controlfrom().
+        systems:steer_to("dock").
+        rcs on.
+
+        local gain is 0.
+        local done is false.
+
+        when c_port:state:split(" ")[0] = "acquire" then {
+            set target to "".
+            unlock steering.
+            set done to true.
+            return false.
+        }
+
+        until done {
+            local r_0 is t_port:nodeposition - c_port:nodeposition.
+            local v_0 is target:velocity:orbit - ship:velocity:orbit.
+            
+            local trg is r_0:normalized.
+            local prt is c_port:facing:vector.
+            local diff is trg - prt.
+
+            local r_str is vdot(ship:facing:starvector, diff).
+            local r_top is vdot(ship:facing:topvector, diff).
+            local r_fre is vdot(ship:facing:forevector, r_0).
+
+            local v_str is vdot(ship:facing:starvector, v_0).
+            local v_top is vdot(ship:facing:topvector, v_0).
+            local v_fre is vdot(ship:facing:forevector, v_0).
+
+            if abs(round(vcrs(trg, prt):mag, 2)) < 0.05 set gain to 1.
+
+            set ship:control:translation to v(
+                control:corrective_sigmoid(v_str, -1, -r_str, 100),
+                control:corrective_sigmoid(v_top, -1, -r_top, 100),
+                gain*control:corrective_sigmoid(v_fre, -1, -0.25, 100)
+            ).
+
+            wait 0.
+        }
+
+        wait until c_port:state:split(" ")[0] = "docked".
+        rcs off.
+        set ship:control:neutralize to true.
+    }
+
+
+    // Liftoff countdown timer.
+    function launch {
+        systems:ascent_staging().
+
+        local launch_tower is ship:partsnamed("launchclamp1").
+        local t is time:seconds + 10.
+        local t_minus is t - time:seconds.
+
+        when t_minus < 1 then {
+            systems:stage_ignition(0).
+            when t_minus < 0.5 then {
+                set throt to 1.
+                when t_minus < 0.25 then {
+                    for part in launch_tower part:getmodulebyindex(0):doevent("release clamp").
+                    return false.
+                }
+                return false.
+            }
+            return false.
+        }
+
+        until t_minus < 0 {
+            set t_minus to t - time:seconds.
+            hudtext(round(t_minus, 0), 1, 4, 100, rgb(1, 0.75, 0), false).
+            wait 0.
+        }
+    }
+
+
+    // Launch to initial orbit with given apoapsis and level-off altitude.
+    // NOTE: PARAMETERS ARE IN METERS.
+    function ascent {
+        parameter ap_trgt, hz_trgt.
+
+        local pitch is 0.
+        lock steering to up*r(0, pitch, 90).
+
+        local gnd_alt is {
+            return altitude - geoposition:terrainheight.
+        }.
+
+        until round(pitch) = -90 {
+            set pitch to (90/hz_trgt^2) * (gnd_alt() - hz_trgt)^2 - 90.
+            wait 0.
+        }
+
+        set pitch to -90.
+        control:fractional_throttle(
+            { return apoapsis. },
+            ap_trgt,
+            { return round(apoapsis) > 0.75*ap_trgt. }
+        ).
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "intra_soi_injection", intra_soi_injection@,
+        "extra_soi_injection", extra_soi_injection@,
+        "insertion", insertion@,
+        "circularize", circularize@,
+        "change_inclination", change_inclination@,
+        "match_inclination", match_inclination@,
+        "dock", dock@,
+        "launch", launch@,
+        "ascent", ascent@
+    )).
+
+}

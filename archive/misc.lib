@@ -1,0 +1,147 @@
+//————————————————————————————————————————————————————————————————————————————————————————————————————————————————————//
+//*************************************************** MISCELANEOUS ***************************************************//
+//————————————————————————————————————————————————————————————————————————————————————————————————————————————————————//
+
+{
+    // Match target orbit inclination.
+    function match_inc {
+        parameter node_type, tgt_obt, mult is 1000.
+
+        systems:steer_to(node_type).
+
+        until relative_inclination(tgt_obt) < 0.000001 {
+            local dV is 2*velocity:orbit:mag*sin(relative_inclination(tgt_obt)).
+            local r_0 is positionat(ship, time:seconds + systems:burn_time(dV)/2) - body:position.
+            local node is vcrs
+                specific_angular_momentum():normalized,
+                specific_angular_momentum(tgt_obt):normalize
+            ).
+
+            if node_type = "dn" set node to -node.
+
+            local x is pi_vang(r_0, node, specific_angular_momentum()).
+
+            set throt to gaussian(x, mult).
+            wait 0. 
+        }
+
+        set throt to 0. wait 5.
+    }
+
+
+    // Docks with target vessel.
+    // NOTE: both ships must have a docking port tagged "port".
+    function dock {
+        local t_port is target:partstagged("port")[0].
+        local c_port is ship:partstagged("port")[0].
+
+        c_port:controlfrom().
+        systems:steer_to("dock").
+        rcs on.
+
+        local gain is 0.
+        local done is false.
+
+        when c_port:state:split(" ")[0] = "acquire" then {
+            set target to "".
+            unlock steering.
+            set done to true.
+            return false.
+        }
+
+        until done {
+            local r_0 is t_port:nodeposition - c_port:nodeposition.
+            local v_0 is target:velocity:orbit - ship:velocity:orbit.
+            
+            local trg is r_0:normalized.
+            local prt is c_port:facing:vector.
+            local diff is trg - prt.
+
+            local r_str is vdot(ship:facing:starvector, diff).
+            local r_top is vdot(ship:facing:topvector, diff).
+            local r_fre is vdot(ship:facing:forevector, r_0).
+
+            local v_str is vdot(ship:facing:starvector, v_0).
+            local v_top is vdot(ship:facing:topvector, v_0).
+            local v_fre is vdot(ship:facing:forevector, v_0).
+
+            if abs(round(vcrs(trg, prt):mag, 2)) < 0.05 set gain to 1.
+
+            set ship:control:translation to v(
+                control:corrective_sigmoid(v_str, -1, -r_str, 100),
+                control:corrective_sigmoid(v_top, -1, -r_top, 100),
+                gain*control:corrective_sigmoid(v_fre, -1, -0.25, 100)
+            ).
+
+            wait 0.
+        }
+
+        wait until c_port:state:split(" ")[0] = "docked".
+        rcs off.
+        set ship:control:neutralize to true.
+    }
+
+
+    // Liftoff countdown timer.
+    function launch {
+        systems:ascent_staging().
+
+        local launch_tower is ship:partsnamed("launchclamp1").
+        local t is time:seconds + 10.
+        local t_minus is t - time:seconds.
+
+        when t_minus < 1 then {
+            systems:stage_ignition(0).
+            when t_minus < 0.5 then {
+                set throt to 1.
+                when t_minus < 0.25 then {
+                    for part in launch_tower part:getmodulebyindex(0):doevent("release clamp").
+                    return false.
+                }
+                return false.
+            }
+            return false.
+        }
+
+        until t_minus < 0 {
+            set t_minus to t - time:seconds.
+            hudtext(round(t_minus, 0), 1, 4, 100, rgb(1, 0.75, 0), false).
+            wait 0.
+        }
+    }
+
+
+    // Launch to initial orbit with given apoapsis and level-off altitude.
+    // NOTE: parameters are in meters
+    function ascent {
+        parameter ap_trgt, hz_trgt.
+
+        local pitch is 0.
+        lock steering to up*r(0, pitch, 90).
+
+        local gnd_alt is {
+            return altitude - geoposition:terrainheight.
+        }.
+
+        until round(pitch) = -90 {
+            set pitch to (90/hz_trgt^2) * (gnd_alt() - hz_trgt)^2 - 90.
+            wait 0.
+        }
+
+        set pitch to -90.
+        control:fractional_throttle(
+            { return apoapsis. },
+            ap_trgt,
+            { return round(apoapsis) > 0.75*ap_trgt. }
+        ).
+    }
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+    export(lex(
+        "match_inc", match_inc@,
+        "dock", dock@,
+        "launch", launch@,
+        "ascent", ascent@
+    )).
+}

@@ -1,0 +1,121 @@
+//————————————————————————————————————————————————————————————————————————————————————————————————————————————————————//
+//************************************************** ASTRODYNAMICS ***************************************************//
+//————————————————————————————————————————————————————————————————————————————————————————————————————————————————————//
+
+
+{
+    // Your ship's orbital elements in any patch.
+    function orbital_elements {
+        parameter elm, o is orbit.
+
+        return lex(
+            "r",    { return o:position - o:body:position.                          },
+            "v",    { return o:velocity:orbit.                                      },
+            "h",    { return vcrs(o:position - o:body:position, o:velocity:orbit).  },
+            "e",    { return o:eccentricity.                                        },
+            "nu",   { return o:trueanomaly.                                         },
+            "mu",   { return o:body:mu.                                             },
+            "soi",  { return o:body:soiradius.                                      },
+            "sma",  { return o:semimajoraxis.                                       },
+            "slr",  { return o:semimajoraxis*(1 - o:eccentricity^2).                },
+            "aop",  { return o:argumentofperiapsis.                                 }
+        )[elm]().
+    }
+
+
+    // Periapsis vector for any patch (technically, this is the eccentricity vector).
+    function pe_vec {
+        parameter o is orbit.
+
+        local r_0 is o:position - o:body:position.
+        local v_0 is o:velocity:orbit.
+        local mu is o:body:mu.
+        local h is vcrs(r_0, v_0).
+
+        return 1/mu * vcrs(v_0, h) - r_0:normalized.
+    }
+
+
+    // Apoapsis vector for any patch that has an apoapsis (i.e., NOT hyperbolic trajectories).
+    function ap_vec {
+        parameter o is orbit.
+        return -pe_vec(o).
+    }
+
+
+    // True anomaly as a function of distance to central body.
+    function nu_of_r {
+        parameter r_0, o is orbit.
+
+        local sma is orbital_elements("sma", o).
+        local e is orbital_elements("e", o).
+        local slr is orbital_elements("slr", o).
+
+        return round(arccos(1/e * (slr/r_0 - 1)), 8).
+    }
+
+
+    // True anomaly at SOI exit.
+    function soi_exit {
+        parameter o is orbit.
+        return nu_of_r(o:body:soiradius, o).
+    }
+
+
+    // True anomaly at SOI entry.
+    function soi_entry {
+        parameter o is orbit.
+        return 360 - nu_of_r(o:body:soiradius, o).
+    }
+
+
+    // Time of flight to the given true anomaly.
+    function time_of_flight {
+        parameter nu_f, o is orbit, nu_i is o:trueanomaly.
+
+        local sma is o:semimajoraxis.
+        local mu is o:body:mu.
+        local e is o:eccentricity.
+
+        local E_f is eccentric_anomaly(nu_f, e).
+        local E_i is eccentric_anomaly(nu_i, e).
+
+        return sqrt(abs(sma)^3 / mu) * delta_M(E_f, E_i, e).
+    }
+
+
+    // Hyperbolic or normal eccentric anomaly as a function of true anomaly, nu.
+    function eccentric_anomaly {
+        parameter nu, e.
+        local arg is sqrt(abs(1 - e)/(1 + e)) * tan(nu / 2).
+        
+        if e > 1 return 2*math:atanh(arg).
+        else return 2*arctan(arg).
+    }
+
+
+    // Delta hyperbolic or normal mean anomaly.
+    function delta_M {
+        parameter E_f, E_i, e.
+        local delta_E is mod(E_f - E_i + 360, 360).
+    
+        if e > 1 return e*(math:sinh(E_f) - math:sinh(E_i)) - delta_E.
+        else return constant:degtorad*delta_E - e*(sin(E_f) - sin(E_i)).
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "orbital_elements", orbital_elements@,
+        "pe_vec", pe_vec@,
+        "ap_vec", ap_vec@,
+        "nu_of_r", nu_of_r@,
+        "soi_exit", soi_exit@,
+        "soi_entry", soi_entry@,
+        "time_of_flight", time_of_flight@,
+        "eccentric_anomaly", eccentric_anomaly@,
+        "delta_M", delta_M@
+    )).
+}

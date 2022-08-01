@@ -1,0 +1,92 @@
+//———————————————————————————————————————————————  THROTTLE ENVELOPES  ———————————————————————————————————————————————//
+
+
+{
+    // See these graphs in action here: https://www.desmos.com/calculator/0p27vvmjso
+
+
+    // for full throttle maneuvers such as raising or lowering an apse,
+    // or fine-tuning a flyby altitude, etc.
+    // x is the function input.
+    // dir switches the direction of approach to termination.
+    // trgt is the termination point.
+    // sens controls the curvature of the response; larger sensitivity = shallower curve.
+    function neg_exp {
+        parameter x, dir, trgt, sens.
+        local arg is dir*(x - trgt)/sens.
+        local f is 1 - math:exp(min(arg, 100)).
+        return round(f, 10).
+    }
+
+
+    // for sensitive manuevers that require high precision,
+    // i.e., minor inclination adjustment, circularization, etc. 
+    // x is the function input.
+    // pinch controls the response at the activation point.
+    // shift defaults to 0.
+    function gaussian {
+        parameter x, pinch, shift is 0.
+        local arg is -pinch*(x - shift)^2.
+        local f is math:exp(min(arg, 100)).
+        return round(f, 10).
+    }
+
+
+    // f: R → [0, 1] | [1, 0].
+    // x is the function input.
+    // dir switches the activation direction as x → shift.
+    // shift is the location of the activation point.
+    // pinch controls the response at the activation point.
+    function binary_sigmoid {
+        parameter x, dir, shift, pinch.
+        local arg is dir*pinch*(x - shift).
+        local f is 1 / (1 + math:exp(min(arg, 100))).
+        return round(f, 10).
+    }
+
+
+    // f: R → [-1, 1] | [1, -1].
+    // x is the function input.
+    // dir switches the activation direction: (+) → (-) | (-) → (+).
+    // shift is the location of the activation point.
+    // pinch controls the response at the activation point.
+    function corrective_sigmoid {
+        parameter x, dir, shift, pinch.
+        local f is 2*binary_sigmoid(x, dir, shift, pinch) - 1.
+        return round(f, 10).
+    }
+
+
+    // Fractional throttle envelope starts at full thrust until
+    // condition 'proceed' is met, then decreases throttle as
+    // fraction between 'var' and 'interval' approaches 1. 
+    function fractional_throttle {
+        parameter var, xf, proceed is { return true. }.
+
+        set throt to 1.
+
+        wait until proceed().
+        local xi is var().
+        local interval is abs(xf - xi).
+
+        until round(var()) = xf {
+            local x is abs(var() - xi)/interval.
+            set throt to 1 - x^16.
+            wait 0.
+        }
+
+        set throt to 0.
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "neg_exp", neg_exp@,
+        "gaussian", gaussian@,
+        "binary_sigmoid", binary_sigmoid@,
+        "corrective_sigmoid", corrective_sigmoid@,
+        "fractional_throttle", fractional_throttle@
+    )).
+}

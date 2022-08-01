@@ -1,0 +1,183 @@
+//——————————————————————————————————————————————————  SHIP SYSTEMS  ——————————————————————————————————————————————————//
+
+
+{
+    global steer_lex is lex(
+        "pro",      { lock steering to prograde*r(0, 0, 0).         },
+        "a_pro",    { lock steering to prograde*r(180, 0, 0).       },
+        "nml",      { lock steering to prograde*r(0, 270, 0).       },
+        "a_nml",    { lock steering to prograde*r(0, 90, 0).        },
+        "rad",      { lock steering to prograde*r(270, 0, 0).       },
+        "a_rad",    { lock steering to prograde*r(90, 0, 0).        },
+        "srf",      { lock steering to srfprograde + r(0, 0, 180).                 },
+        "a_srf",    { lock steering to srfretrograde.               },
+        "tar",      { lock steering to target:direction.            },
+        "a_tar",    { lock steering to -target:direction.           },
+        "dock",     { lock steering to target:facing*r(0,180,180).  }
+    ).
+
+
+    // Points the craft in the specified direction.
+    function steer_to {
+        parameter dir is "".
+
+        // Steer to given direction if present in steering lexicon.
+        if steer_lex:haskey(dir) {
+            steer_lex[dir]().
+            until false {
+                // "Dot product" of the facing and steering coordinate frames.
+                local dot_dirs is
+                    vdot(ship:facing*r(90, 0, 0):vector, steering*r(90, 0, 0):vector)
+                        + vdot(ship:facing*r(0, 90, 0):vector, steering*r(0, 90, 0):vector)
+                            + vdot(ship:facing*r(0, 0, 90):vector, steering*r(0, 0, 90):vector).
+                
+                // Wait until we're pointed correctly.
+                if round(dot_dirs, 4) = 3 break.
+                else wait 0.
+            }
+        }
+
+        // If dir not found, unlock steering.
+        else unlock steering.
+    }
+
+
+    // Blocking warp. Program will not continue until warp is complete.
+    function warp_to {
+        parameter t.
+        local t is time:seconds + t.
+        warpto(t).
+        wait until time:seconds > t
+            and kuniverse:timewarp:rate = 1
+                and kuniverse:timewarp:issettled
+                    and ship:unpacked.
+        wait 0.
+    }
+
+
+    // Return effective exhaust velocity of currently active engine.
+    function effective_exhaust {
+        for part in ship:partstaggedpattern("_[E]\z") if part:ignition {
+            return part:isp*constant:g0.
+            break.
+        }
+    }
+
+
+    // Rate of change of var averaged over one physics 'tick'.
+    // NOTE: VAR MUST BE A DELEGATE.
+    function rate_of_change {
+        parameter var.
+
+        local t_0 is time:seconds.
+        local var_0 is var().
+
+        wait 0.
+        
+        local t_1 is time:seconds.
+        local var_1 is var().
+
+        local d_var is (var_1 - var_0)/(t_1 - t_0).
+
+        return d_var.
+    }
+
+
+    // Burn time for given Δv.
+    // NOTE: ASSUMES NO EXTERNAL FORCING.
+    function burn_time {
+        parameter dV.
+
+        local mi is mass.
+        local T is availablethrust.
+        local ve is effective_exhaust().
+
+        return (mi*ve/T)*(1 - math:exp(-dV/ve)).
+    }
+
+
+    // Straight line displacement over the course of a Δv maneuver in a given direction of burn,
+    // +1 for purely prograde, -1 for purely retrograde. Defaults to 1.
+    function burn_disp {
+        parameter dV, dir is 1.
+
+        local mi is ship:mass * 1000.
+        local vi is velocity:orbit:mag.
+
+        local tm is availablethrust * 1000.
+        local ve is effective_exhaust().
+        local md is tm / ve.
+
+        local t is mi/md * (1 - math:exp(-dV/ve)).
+
+        local f is { parameter t. return (mi - md*t) * (ln(mi - md*t) - 1). }.
+        local df is f(t) - f(0).
+
+        return vi*t + dir*ve*(t*ln(mi) + df/md).
+    }
+
+
+    // Activate all engines on the given stage.
+    function stage_ignition {
+        parameter n.
+        for part in ship:partstaggedpattern("(?="+n+"_[E])") part:activate().
+    }
+
+
+    // Shutdown all engines on the given stage.
+    function stage_shutdown {
+        parameter n.
+        for part in ship:partstaggedpattern("(?="+n+"_[E])") part:shutdown().
+    }
+
+
+    // Jettison the stage with the given stage number and stage type ("S" for normal stage, "B" for booster).
+    function stage_jettison {
+        parameter n, s.
+
+        for part in ship:partstaggedpattern("(?=["+s+"]"+n+"_[J])") part:activate(). wait 0.
+        for part in ship:partstaggedpattern("(?=["+s+"]"+n+"_[D])") {
+            if part:hasmodule("moduleanchoreddecoupler") local type is "moduleanchoreddecoupler".
+            else local type is "moduledecouple".
+            part:getmodule(type):doevent("decouple").
+        }
+    }
+
+
+    // Ascent staging triggers.
+    function ascent_staging {   
+        on ship:partstagged("S0_E")[0]:flameout {
+            wait 2.
+            stage_jettison(0, "S").
+            wait 2.
+            toggle ag1.
+            wait 3.
+            stage_ignition(1).
+        }
+        
+        if ship:partstagged("B0_E"):length() > 0 {
+            on ship:partstagged("B0_E")[0]:flameout {
+                wait 1.
+                stage_jettison(0, "B").
+            }
+        }
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+
+    export(lex(
+        "steer_to", steer_to@,
+        "warp_to", warp_to@,
+        "effective_exhaust", effective_exhaust@,
+        "rate_of_change", rate_of_change@,
+        "burn_time", burn_time@,
+        "burn_disp", burn_disp@,
+        "stage_ignition", stage_ignition@,
+        "stage_shutdown", stage_shutdown@,
+        "stage_jettison", stage_jettison@,
+        "ascent_staging", ascent_staging@
+    )).
+
+}

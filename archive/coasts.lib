@@ -1,0 +1,92 @@
+//————————————————————————————————————————————————————————————————————————————————————————————————————————————————————//
+//****************************************************** COASTS ******************************************************//
+//————————————————————————————————————————————————————————————————————————————————————————————————————————————————————//
+
+{
+    // Coast to desired true anomaly - exit_time in seconds. Defaults to 60.
+    function to_nu {
+        parameter ang, exit_time is 60.
+        systems:warp_to(astrodynamics:time_of_flight(mod(orbit:trueanomaly + ang, 360)) - exit_time).
+        wait 0.
+    }
+
+
+    // Coast to desired phase angle.
+    function to_phz {
+        parameter phz, thresh is 0.5.
+        local warp_speed is 0.
+
+        on warp_speed {
+            set kuniverse:timewarp:warp to warp_speed.
+            if warp_speed = 0 return false.
+            else preserve.
+        }
+
+        until phz() < thresh and warp_speed = 0 {
+            local t is astrodynamics:time_of_flight(mod(orbit:trueanomaly + phz(), 360)).
+            set warp_speed to helpers:warp_help(t).        
+            wait 0.
+        }
+    }
+
+
+    // Coast to specified exit_time (default 90s) before target_body periapsis.
+    // NOTE: ASSUMES AN ENCOUNTER AND A PERIAPSIS WITH TARGET_BODY, WILL CRASH IF NONE EXISTS.
+    function to_flyby {
+        parameter target_body, exit_time is 90.
+
+        utilities:ipu(2000).
+        local n is helpers:flyby_patch(target_body).
+        local flyby is ship:patches[n].
+
+        local tof_1 is ship:patches[n - 1]:nextpatcheta.
+        local tof_2 is astrodynamics:time_of_flight(360, flyby, flyby:trueanomaly).
+
+        systems:warp_to(tof_1 + tof_2 - exit_time).
+        utilities:ipu().
+    }
+
+
+    // Coast to next patch's relative ascending/descending node, for interplanetary mid-course corrections.
+    function to_node {
+        parameter target_body.
+        
+        // Time of flight to origin SOI exit.
+        local tof_1 is astrodynamics:time_of_flight(soi_exit()) + 10.
+
+        // r and v at SOI exit.
+        local r_trans is positionat(ship, time:seconds + tof_1) - positionat(sun, time:seconds + tof_1).
+        local v_trans is velocityat(ship, time:seconds + tof_1):orbit.
+
+        // Relative specific angular momentum vectors.
+        local h_trg is navigation:specific_angular_momentum(target_body).
+        local h_sun is astrodynamics:orbital_elements("h", orbit:nextpatch).
+
+        // True anomaly at start of next patch.
+        local sign is helpers:dot_sign(h_sun, vcrs(astrodynamics:pe_vec(orbit:nextpatch), r_trans)).
+        local nu_sun is mod(360 + sign*astrodynamics:nu_of_r(r_trans:mag, orbit:nextpatch), 360).
+
+        // Delta true anomaly from SOI transition to the nearest relative ascending/descending node.
+        local theta_to_an is helpers:tau_vang(r_trans, vcrs(h_sun, h_trg), h_sun).
+        local dTheta is nu_sun + min(theta_to_an, mod(theta_to_an + 180, 360)).
+        
+        // Time of flight to nearest relative ascending/descending node as a function of delta true anomaly.
+        local tof_2 is astrodynamics:time_of_flight(dTheta, orbit:nextpatch) - 70.
+
+        // Engage!
+        systems:warp_to(tof_1 + tof_2).
+        wait 0.
+    }
+
+
+//—————————————————————————————————————————————————————  EXPORT  —————————————————————————————————————————————————————//
+
+    export(lex(
+        "systems:warp_to", systems:warp_to@,
+        "to_nu", to_nu@,
+        "to_phz", to_phz@,
+        "to_flyby", to_flyby@,
+        "to_node", to_node@
+    )).
+
+}
