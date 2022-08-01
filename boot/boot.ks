@@ -10,6 +10,7 @@ global utilities is import("0:libraries/utilities.lib").
 global helpers is import("0:libraries/helpers.lib").
 global math is import("0:libraries/math.lib").
 
+utilities:openterminal().
 local runmode is import(core:tag).
 
 for i in range(init, min(breakpoint, runmode:length())) {

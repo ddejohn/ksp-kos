@@ -16,6 +16,10 @@
         // set terminal:height to 15.
     }
 
+    function openterminal {
+        parameter target_core is core.
+        target_core:doaction("open terminal", true).
+    }
 
     // Set IPU to val. Defaults to 200.
     function ipu {
@@ -202,6 +206,7 @@
 
     export(lex(
         "initialize", initialize@,
+        "openterminal", openterminal@,
         "ipu", ipu@,
         "save", save@,
         "r_pad", r_pad@,
