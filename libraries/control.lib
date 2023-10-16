@@ -69,7 +69,7 @@
         local xi is var().
         local interval is abs(xf - xi).
 
-        until round(var()) = xf {
+        until round(var()) = round(xf) {
             local x is abs(var() - xi)/interval.
             set throt to 1 - x^16.
             wait 0.

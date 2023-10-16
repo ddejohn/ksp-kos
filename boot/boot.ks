@@ -1,6 +1,3 @@
-parameter init is 0.
-parameter breakpoint is 1000.
-
 runoncepath("0:boot/import.ks").
 global guidance is import("0:libraries/guidance.lib").
 global navigation is import("0:libraries/navigation.lib").
@@ -11,12 +8,32 @@ global helpers is import("0:libraries/helpers.lib").
 global math is import("0:libraries/math.lib").
 
 utilities:openterminal().
-local runmode is import(core:tag).
+local flight_plan is import(core:tag).
+local mission_log is ship:name:tolower() + "-" + core:tag:tolower() + ".json".
 
-for i in range(init, min(breakpoint, runmode:length())) {
+local init is 0.
+local meta is lexicon().
+
+if exists(mission_log) {
+    print "loading mission log...".
+    set meta to readJson(mission_log).
+    print "current stage: " + meta["current_stage"].
+    set init to flight_plan:keys:indexof(meta["current_stage"]).
+} else {
+    meta:add("launch_date", time).
+    meta:add("current_stage", flight_plan:keys[0]).
+}
+
+for i in range(init, flight_plan:length()) {
     clearscreen.
-    for k in runmode:keys print k:padleft(17).
+    for k in flight_plan:keys print k:padleft(17).
     print core:tag + "_RUNMODE > " at (0, i).
-    runmode:values[i]().
-    utilities:save(core:tag + "_" + utilities:el_pad(i, 3, "0") + "_" + runmode:keys[i]).
+
+    local current_stage is flight_plan:keys[i].
+    set meta["current_stage"] to current_stage.
+    writeJson(meta, mission_log).
+
+    flight_plan:values[i]().
+
+    utilities:save(core:tag + "_" + current_stage).
 }
