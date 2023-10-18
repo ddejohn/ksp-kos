@@ -70,12 +70,25 @@
     }
 
 
-    // TODO: Intra-SOI injection phasing.
+    // Ideal angle in degrees for same-SOI Hohmann transfer.
     function intra_soi_phasing {
         parameter target_body.
 
-        // local r2 is target_hohmann_ap(target_body)
-        // local target_alt is r2:mag - body:radius
+        local r1 is ship:orbit:apoapsis.
+        local r2 is target_body:orbit:apoapsis.
+
+        return 180 * (1 - 1/(2 * sqrt(2)) * sqrt((r1 / r2 + 1)^3)).
+    }
+
+
+    // Transfer ellipse flight time for same-SOI transfer between two circular orbits
+    function hohmann_transfer_time {
+        parameter target_body.
+
+        local r1 is ship:orbit:apoapsis.
+        local r2 is target_body:orbit:apoapsis.
+
+        return constant:pi * sqrt((r1 + r2)^3 / (8 * body:mu)).
     }
 
 

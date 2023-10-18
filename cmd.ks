@@ -22,8 +22,16 @@
 
     function trans_munar_phasing {
         systems:steer_to("pro").
-        navigation:intra_soi_phasing(mun).
-        // navigation:coast:to_phz(navigation:phase_angle@:bind(mun, 122.23)).
+        local ideal_transfer_angle is navigation:intra_soi_phasing(mun).
+        // print "ideal transfer angle in degrees: " + ideal_transfer_angle.
+        // print "current phase angle: " + navigation:phase_angle(mun).
+        // print "coasting...".
+        navigation:coast:to_phz(navigation:phase_angle@:bind(mun, ideal_transfer_angle)).
+
+        // until false {
+        //     print "current phase angle: " + navigation:phase_angle(mun) at (0, 15).
+        //     wait 0.
+        // }
     }
 
 
